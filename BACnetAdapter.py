@@ -1,4 +1,4 @@
-import threading, json
+import json, threading, sys
 from bacpypes.app import BIPSimpleApplication, BIPForeignApplication
 from bacpypes.apdu import WhoIsRequest
 from bacpypes.pdu import GlobalBroadcast, Address
@@ -31,32 +31,54 @@ class BACnetAdapter(BIPSimpleApplication):
             self.cb_device_client = Client.DeviceClient(self.credentials['systemKey'], self.credentials['systemSecret'], self.credentials['deviceName'], self.credentials['activeKey'], self.credentials['platformURL'])
             cb_auth.Authenticate(self.cb_device_client)
         # init cb mqtt
-        # if self.mqtt is None:
-        #     self.mqtt = MQTT(self.credentials)
+        if self.mqtt is None:
+            self.mqtt = MQTT(self.cb_device_client)
+	    self.mqtt.PublishTopic("testing", "testing")
         # init bacnet devices (comes from cb collection)
         if self.bacnet_devices is None:
             self.bacnet_devices = BACnetDevices(self.cb_device_client, self)
         # init bacnet sensors (comes from cb devices table)
 	if self.bacnet_sensors is None:
-	    self.bacnet_sensors = BACnetSensors()
+	    self.bacnet_sensors = BACnetSensors(self.cb_device_client, self)
         # also init bacnet sensor profiles
 
     def do_IAmRequest(self, apdu):
 	self.bacnet_devices.got_new_device_who_is_response(apdu)
 
-    def send_value_to_platform(self, device, obj, props):
-        obj_to_send = {
-            'device': {
-                'id': device.id,
-                'name': device.name,
-                'source': device.source
-            },
-            'object': obj,
-            'properties': props
-        }
+    def do_ConfirmedCOVNotificationRequest(self, apdu):
+	print "confirmed"
+	#sys.exit("confirmed")
+	print("{} changed\n    {}".format(
+            apdu.monitoredObjectIdentifier,
+            ",\n    ".join("{} = {}".format(
+                element.propertyIdentifier,
+                str(element.value),
+                ) for element in apdu.listOfValues),
+            ))
+
+    def do_UnconfirmedCOVNotificationRequest(self, apdu):
+	print "unconfirmed"
+	#sys.exit("unconfirmed")
+	print("{} changed\n    {}".format(
+            apdu.monitoredObjectIdentifier,
+            ",\n    ".join("{} = {}".format(
+                element.propertyIdentifier,
+                str(element.value),
+                ) for element in apdu.listOfValues),
+            ))
+
+    def send_value_to_platform(self, value_to_send):
+        #obj_to_send = {
+        #    'device': {
+        #        'id': device.id,
+        #        'name': device.name,
+        #        'source': device.source
+        #    },
+        #    'object': obj,
+        #    'properties': props
+        #}
         try:
-            msg = json.dumps(obj_to_send, ensure_ascii=False, default=json_serial)
-            print msg
+            msg = json.dumps(value_to_send, ensure_ascii=False, default=json_serial)
             self.mqtt.PublishTopic("bacnet/in", str(msg))
         except Exception as e:
             print e

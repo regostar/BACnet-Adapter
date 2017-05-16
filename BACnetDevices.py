@@ -92,4 +92,5 @@ class BACnetDevices():
 	    apdu = iocb.ioResponse
 	    new_sensors = apdu.propertyValue.cast_out(ArrayOf(ObjectIdentifier))
 	    self.bacnet_adapter.bacnet_sensors.add_new_sensors_from_device(new_sensors, self.devices[str(apdu.pduSource)])
+	    #self.bacnet_adapter.bacnet_sensors.add_new_sensors_from_device([('analogInput', 3000126), ('analogInput', 3000145), ('analogValue', 3001213), ('analogValue', 3001215), ('analogValue', 3001195), ('analogValue', 3001203), ('analogValue', 3001204)], self.devices[str(apdu.pduSource)])
 
