@@ -1,3 +1,5 @@
+#!/usr/bin/python2.7
+
 from BACnetAdapter import BACnetAdapter
 
 from bacpypes.core import run, enable_sleeping
