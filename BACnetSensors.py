@@ -1,7 +1,8 @@
 import datetime, time, threading, sys
 
-from bacpypes.apdu import PropertyReference, ReadAccessSpecification, ReadPropertyMultipleRequest, ReadPropertyMultipleACK, SubscribeCOVRequest
+from bacpypes.apdu import PropertyReference, ReadAccessSpecification, ReadPropertyMultipleRequest, ReadPropertyMultipleACK, ReadPropertyRequest, SubscribeCOVRequest
 from bacpypes.iocb import IOCB
+from bacpypes.object import get_datatype
 from bacpypes.pdu import Address
 
 from clearblade import Devices
@@ -15,47 +16,61 @@ class BACnetSensors:
 	self.cb_device_client = cb_device_client
 	self.bacnet_adapter = bacnet_adapter
 	self.cb_devices = Devices.Devices(self.cb_device_client)
-	self.pending_cov_subscribes = []
-	devices_from_cb = self.cb_devices.getAllDevices()
-	print devices_from_cb
-	#finally, kick off batch cov processing
-	self._batch_cov_sub_process()
-	# loop through these devices, and setup polling or COV
+	self.pending_poll_requests = []
+	self.pending_new_sensors = []
+	self._update_cb_devices()
+	self._resub_existing_covs()
+	self._start_polling()
+	self._process_poll_requests()
+	self._process_new_sensors()
 
     def add_new_sensors_from_device(self, sensors, device_info):
 	# first filter out any trendLogs, since we don't need them
-	print device_info
+	print "found some new sensors to add"
 	new_sensors = {}
-	count = 0
 	for sensor in sensors:
-	    if sensor[0] != 'trendLog' and sensor[0] != 'device' and count <= 3000:
+	    if sensor[0] != 'trendLog' and sensor[0] != 'device':
 		key = (device_info["ip_address"], sensor[1])
 		self.sensors[key] = {
 		    "bacnet_object_identifier": sensor,
-		    "default_sensor_data_fetch": "cov",
-		    "present_value": None
+		    "present_value": None,
+		    "update_method": None
 		}
-		props_to_get = ['objectName', 'description', 'presentValue', 'units']
-		prop_ref_list = []
-		for prop in props_to_get:
-	    	    ref = PropertyReference(
-			propertyIdentifier=prop
-	    	    )
-		    prop_ref_list.append(ref)
-		read_access_spec = ReadAccessSpecification(
-	    	    objectIdentifier=sensor,
-	    	    listOfPropertyReferences=prop_ref_list
-		)
-		request = ReadPropertyMultipleRequest(
-	    	    listOfReadAccessSpecs=[read_access_spec],
-	    	    destination=Address(device_info["ip_address"].encode("utf-8"))
-		)
-		iocb = IOCB(request)
-		iocb.add_callback(self._got_props_for_object, sensor)
-		self.bacnet_adapter.request_io(iocb)
-		count += 1
+		self.pending_new_sensors.append((device_info["ip_address"].encode("utf-8"), sensor))
 
-    def _got_props_for_object(self, iocb, obj_id):
+    def _process_new_sensors(self):
+	timer = threading.Timer(15, self._process_new_sensors)
+	timer.daemon = True
+	num_to_process = len(self.pending_new_sensors)
+	if num_to_process > 100:
+	     num_to_process = 100
+	count = 0
+	while count < num_to_process:
+	    print "processing new sensor"
+	    new_sensor = self.pending_new_sensors.pop(0)
+	    props_to_get = ['objectName', 'description', 'presentValue', 'units']
+	    prop_ref_list = []
+	    for prop in props_to_get:
+		ref = PropertyReference(
+		    propertyIdentifier=prop
+		)
+		prop_ref_list.append(ref)
+	    read_access_spec = ReadAccessSpecification(
+		objectIdentifier=new_sensor[1],
+		listOfPropertyReferences=prop_ref_list
+	    )
+	    request = ReadPropertyMultipleRequest(
+		listOfReadAccessSpecs=[read_access_spec],
+		destination=Address(new_sensor[0])
+	    )
+	    iocb = IOCB(request)
+	    iocb.add_callback(self._got_props_for_new_object, sensor)
+	    self.bacnet_adapter.request_io(iocb)
+	    count += 1	    
+	timer.start()
+
+    def _got_props_for_new_object(self, iocb, obj_id):
+	print "got props for new object"
 	timestamp = datetime.datetime.utcnow().isoformat()
 	if iocb.ioError:
 	    print("error getting property list: {0}".format(str(iocb.ioError)))
@@ -67,59 +82,119 @@ class BACnetSensors:
 		return	
 	    props_obj = decode_multiple_properties(apdu.listOfReadAccessResults)
 	    # might be a better place to do this translation, but doing it here for now
+	    update_method = "cov" if props_obj["objectName"].find("ZN-T") != -1 else "polling"
 	    sensor_obj = {
 		"description": props_obj["description"],
-		"object_name": props_obj["objectName"],
+		"name": props_obj["objectName"],
 		"present_value": props_obj["presentValue"],
 		"time_stamp": timestamp,
-		"object_type": obj_id[0],
-		"object_identifier": obj_id[1],
-	    	"units": props_obj["units"]
+		"bacnet_object_type": obj_id[0],
+		"bacnet_identifier": obj_id[1],
+	    	"units": props_obj["units"],
+		"update_method": update_method,
+	        "new": True,
+	        "parent_device_ip": str(apdu.pduSource)
 	    }
 	    self.sensors[(str(apdu.pduSource), obj_id[1])].update(sensor_obj)
 	    self.bacnet_adapter.send_value_to_platform(sensor_obj)
-	    self.pending_cov_subscribes.append((str(apdu.pduSource), obj_id))
-	    #self._cov_subscribe(str(apdu.pduSource), obj_id)
+	    #we don't need to do anything if method is polling, because it will just automatically get picked up next cycle
+	    if sensor_obj["update_method"] == "polling":
+		print "polling time"
+	    elif sensor_obj["update_method"] == "cov":
+		self._cov_subscribe(str(apdu.pduSource), obj_id)
+	    else:
+		print "unexpected update method for sensor"
 
-    def _batch_cov_sub_process(self):
-	print "in batch cov process"
-	timer = threading.Timer(10, self._batch_cov_sub_process)
+    def _update_cb_devices(self):
+	print "updating cb devices"
+	timer = threading.Timer(60, self._update_cb_devices)
 	timer.daemon = True
-	#grab the top 200 pending covs and sign them up
-	cov_to_process = len(self.pending_cov_subscribes)
-	if cov_to_process > 50:
-	    cov_to_process = 50
+	cb_devices = self.cb_devices.getAllDevices()
+	updated_sensors = {}
+	for device in cb_devices:
+	    if device["type"] != "adapter":
+	    	key = (device["parent_device_ip"], device["bacnet_identifier"])
+	    	updated_sensors[key] = device
+	self.sensors = updated_sensors
+	print("{} devices pulled from cb".format(len(self.sensors)))
+	timer.start()
+
+    def _start_polling(self):
+	print "polling"
+	timer = threading.Timer(120, self._start_polling)
+	timer.daemon = True
+	for key in self.sensors:
+	    update_method = self.sensors[key]["update_method"]
+	    if update_method is not None and update_method == "polling":
+		self.pending_poll_requests.append((key[0].encode("utf-8"), (self.sensors[key]["bacnet_object_type"].encode("utf-8"), self.sensors[key]["bacnet_identifier"])))
+		#self._get_present_value_prop(key[0].encode("utf-8"), (self.sensors[key]["bacnet_object_type"].encode("utf-8"), self.sensors[key]["bacnet_identifier"]))
+	timer.start()
+
+    def _process_poll_requests(self):
+	print "processing polling requests"
+	timer = threading.Timer(15, self._process_poll_requests)
+	time.daemon = True
+	num_to_process = len(self.pending_poll_requests)
+	if num_to_process < 100:
+	    num_to_process = 100
 	count = 0
-	print("cov to process is {}".format(cov_to_process))
-	while count < cov_to_process:
-	    cov = self.pending_cov_subscribes.pop(0)
-	    print cov
-	    self._cov_subscribe(cov[0], cov[1])
-	    count += 1
+	while count < num_to_process:
+	    if len(self.pending_poll_requests) > 0:
+		poll_request = self.pending_poll_requests.pop(0)
+	    	self._get_present_value_prop(poll_request[0], poll_request[1])
+	    	count += 1
+	timer.start()
+
+    def _get_present_value_prop(self, parent_device_ip, sensor_obj_id):
+	print "getting present value"
+	request = ReadPropertyRequest(
+	    destination=Address(parent_device_ip),
+	    objectIdentifier=sensor_obj_id,
+	    propertyIdentifier="presentValue"
+	)
+	iocb = IOCB(request)
+	iocb.add_callback(self._got_present_value_for_existing_sensor, sensor_obj_id)
+	self.bacnet_adapter.request_io(iocb)
+	print "sent request"
+
+    def _got_present_value_for_existing_sensor(self, iocb, obj_id):
+	print "got present value for polling"
+	now = datetime.datetime.utcnow().isoformat()
+	if iocb.ioError:
+	    print("error during read present value: {}".format(str(iocb.ioError)))
+	else:
+	    apdu = iocb.ioResponse
+	    datatype = get_datatype(obj_id[0], "presentValue")
+	    value = apdu.propertyValue.cast_out(datatype)
+	    msg_to_send = {
+		"time_stamp": now,
+		"name": self.sensors[(str(apdu.pduSource), obj_id[1])]["name"],
+		"present_value": value
+	    }
+	    self.bacnet_adapter.send_value_to_platform(msg_to_send)
+	
+    def _resub_existing_covs(self):
+	print "resubing covs"
+	timer = threading.Timer(180, self._resub_existing_covs)
+	timer.daemon = True
+	for key in self.sensors:
+	    update_method = self.sensors[key]["update_method"]
+	    if update_method is not None and update_method == "cov":
+		self._cov_subscribe(key[0].encode("utf-8"), (self.sensors[key]["bacnet_object_type"].encode("utf-8"), self.sensors[key]["bacnet_identifier"]))
 	timer.start()
 
     def _cov_subscribe(self, parent_device_ip, sensor_obj_id):
-	print "in cov subscribe"
 	request = SubscribeCOVRequest(
 	    subscriberProcessIdentifier=2367,
 	    monitoredObjectIdentifier=sensor_obj_id,
 	    destination=Address(parent_device_ip)
 	)
-	print "made request"
 	request.pduDestination = Address(parent_device_ip)
-	request.lifetime = 1200
-	request.issueConfirmedNotifications = True
-	print "set some stuff"
+	request.lifetime = 240
+	request.issueConfirmedNotifications = False
 	iocb = IOCB(request)
 	iocb.add_callback(self._cov_sub_complete)
-    	print "send it off"
-	try:
-	    self.bacnet_adapter.process_io(iocb)
-	except:
-	    print "exception happened"
-	    print sys.exc_info()[0]
-	print sys.exc_info()[0]
-	print "done"	
+	self.bacnet_adapter.request_io(iocb)
 
     def _cov_sub_complete(self, iocb):
 	if iocb.ioError:

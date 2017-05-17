@@ -63,7 +63,6 @@ class BACnetDevices():
 	    changes = {
 		"device_name": device_name,
 		"bacnet_device_identifier":  device_id[1],	    
-		"default_sensor_data_fetch": "cov"
 	    }
 	    results = self.cb_collection.update(changes, query)   
 	    if results["count".encode('utf-8')] != 1:
@@ -71,7 +70,6 @@ class BACnetDevices():
 	    else:
 		#rather then fetch from the server again, just update these here
 		self.devices[str(apdu.pduSource)]["device_name"] = device_name.decode("utf-8")
-		self.devices[str(apdu.pduSource)]["default_sensor_data_fetch"] = "cov".decode("utf-8")
 		self.devices[str(apdu.pduSource)]["bacnet_device_identifier"] = device_id[1]
 		self._get_new_sensors_for_new_device(apdu.pduSource, device_id)
 

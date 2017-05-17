@@ -1,6 +1,7 @@
-import json, threading, sys
+import datetime, json, threading, sys
 from bacpypes.app import BIPSimpleApplication, BIPForeignApplication
 from bacpypes.apdu import WhoIsRequest
+from bacpypes.object import get_datatype
 from bacpypes.pdu import GlobalBroadcast, Address
 
 from BACnetDevices import BACnetDevices
@@ -45,27 +46,19 @@ class BACnetAdapter(BIPSimpleApplication):
     def do_IAmRequest(self, apdu):
 	self.bacnet_devices.got_new_device_who_is_response(apdu)
 
-    def do_ConfirmedCOVNotificationRequest(self, apdu):
-	print "confirmed"
-	#sys.exit("confirmed")
-	print("{} changed\n    {}".format(
-            apdu.monitoredObjectIdentifier,
-            ",\n    ".join("{} = {}".format(
-                element.propertyIdentifier,
-                str(element.value),
-                ) for element in apdu.listOfValues),
-            ))
-
     def do_UnconfirmedCOVNotificationRequest(self, apdu):
-	print "unconfirmed"
-	#sys.exit("unconfirmed")
-	print("{} changed\n    {}".format(
-            apdu.monitoredObjectIdentifier,
-            ",\n    ".join("{} = {}".format(
-                element.propertyIdentifier,
-                str(element.value),
-                ) for element in apdu.listOfValues),
-            ))
+	now = datetime.datetime.utcnow().isoformat()
+	sensor_name = self.bacnet_sensors.sensors[(str(apdu.pduSource), apdu.monitoredObjectIdentifier[1])]["name"]
+	print sensor_name
+	msg_to_send = {
+	    "time_stamp": now,
+	    "name": sensor_name
+	}
+	for element in apdu.listOfValues:
+	    if element.propertyIdentifier == "presentValue":
+		datatype = get_datatype(apdu.monitoredObjectIdentifier[0], "presentValue")
+		msg_to_send["present_value"] = element.value.cast_out(datatype)
+	self.send_value_to_platform(msg_to_send)
 
     def send_value_to_platform(self, value_to_send):
         #obj_to_send = {
