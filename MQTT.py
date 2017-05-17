@@ -18,7 +18,7 @@ class MQTT:
         cb_auth = auth.Auth()
 
         #Authenticate using device auth
-        device = Client.DevClient(self.systemKey, self.systemSecret, self.username, self.password, self.platformURL)
+        device = Client.DeviceClient(self.systemKey, self.systemSecret, self.username, self.password, self.platformURL)
         cb_auth.Authenticate(device)
         messaging_client = Messaging.Messaging(device)
 
