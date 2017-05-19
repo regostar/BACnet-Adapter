@@ -22,13 +22,13 @@ class BACnetDevices():
 
     def _get_devices_from_cb_collection(self):
 	print "checking for new bacnet controllers"
-	timer = threading.Timer(60, self._get_devices_from_cb_collection)
+	timer = threading.Timer(120, self._get_devices_from_cb_collection)
 	timer.daemon = True
 	collection = self.cb_collection.fetch()
 	devices = collection['DATA']
 	for device in devices:
 	    if device["device_name"] == None or device["device_name"] == "".encode("utf-8"):
-		print "found new device {}".format(device["device_name"])
+		print "found new device {}".format(device["item_id"])
 		self._initialize_new_deivce(device["item_id"], device["ip_address"].encode("utf-8"))
 	    self.devices[device["ip_address"]] = device
 	timer.start()

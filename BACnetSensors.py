@@ -45,8 +45,8 @@ class BACnetSensors:
 	if num_to_process > 100:
 	     num_to_process = 100
 	count = 0
+	print("processing {} new sensors".format(num_to_process))
 	while count < num_to_process:
-	    print "processing new sensor"
 	    new_sensor = self.pending_new_sensors.pop(0)
 	    props_to_get = ['objectName', 'description', 'presentValue', 'units']
 	    prop_ref_list = []
@@ -70,7 +70,6 @@ class BACnetSensors:
 	timer.start()
 
     def _got_props_for_new_object(self, iocb, obj_id):
-	print "got props for new object"
 	timestamp = datetime.datetime.utcnow().isoformat()
 	if iocb.ioError:
 	    print("error getting property list: {0}".format(str(iocb.ioError)))
@@ -112,7 +111,7 @@ class BACnetSensors:
 	cb_devices = self.cb_devices.getAllDevices()
 	updated_sensors = {}
 	for device in cb_devices:
-	    if device["type"] != "adapter":
+	    if device["type"] != "adapter" and device["enabled"] == True:
 	    	key = (device["parent_device_ip"], device["bacnet_identifier"])
 	    	updated_sensors[key] = device
 	self.sensors = updated_sensors
@@ -120,7 +119,6 @@ class BACnetSensors:
 	timer.start()
 
     def _start_polling(self):
-	print "polling"
 	timer = threading.Timer(120, self._start_polling)
 	timer.daemon = True
 	for key in self.sensors:
@@ -131,7 +129,6 @@ class BACnetSensors:
 	timer.start()
 
     def _process_poll_requests(self):
-	print "processing polling requests"
 	timer = threading.Timer(15, self._process_poll_requests)
 	time.daemon = True
 	num_to_process = len(self.pending_poll_requests)
@@ -146,7 +143,6 @@ class BACnetSensors:
 	timer.start()
 
     def _get_present_value_prop(self, parent_device_ip, sensor_obj_id):
-	print "getting present value"
 	request = ReadPropertyRequest(
 	    destination=Address(parent_device_ip),
 	    objectIdentifier=sensor_obj_id,
@@ -155,10 +151,8 @@ class BACnetSensors:
 	iocb = IOCB(request)
 	iocb.add_callback(self._got_present_value_for_existing_sensor, sensor_obj_id)
 	self.bacnet_adapter.request_io(iocb)
-	print "sent request"
 
     def _got_present_value_for_existing_sensor(self, iocb, obj_id):
-	print "got present value for polling"
 	now = datetime.datetime.utcnow().isoformat()
 	if iocb.ioError:
 	    print("error during read present value: {}".format(str(iocb.ioError)))
