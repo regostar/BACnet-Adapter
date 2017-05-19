@@ -1,3 +1,5 @@
+import threading
+
 from clearblade import core, Devices
 
 from bacpypes.apdu import WhoIsRequest, IAmRequest, ReadPropertyRequest
@@ -15,16 +17,21 @@ class BACnetDevices():
         self.cb_client = cb_client
         self.bacnet_adapter = bacnet_adapter
         self.cb_collection = core.Collection(self.cb_client, self.BACNET_DEVICES_COLLECTION_ID)
-        collection = self.cb_collection.fetch()
-        devices = collection['DATA']
-        self.devices = {}
-        for device in devices:
-            # first check if we have any new devices, if so initialize them
-            if device["device_name"] == None or device["device_name"] == "".encode('utf-8'):
-                self._initialize_new_deivce(device["item_id"], device["ip_address"].encode('utf-8'))
-            # for easier look up later, let's translate device array into an object with device ip as the key
+	self.devices = {}
+	self._get_devices_from_cb_collection()
+
+    def _get_devices_from_cb_collection(self):
+	print "checking for new bacnet controllers"
+	timer = threading.Timer(60, self._get_devices_from_cb_collection)
+	timer.daemon = True
+	collection = self.cb_collection.fetch()
+	devices = collection['DATA']
+	for device in devices:
+	    if device["device_name"] == None or device["device_name"] == "".encode("utf-8"):
+		print "found new device {}".format(device["device_name"])
+		self._initialize_new_deivce(device["item_id"], device["ip_address"].encode("utf-8"))
 	    self.devices[device["ip_address"]] = device
-	print self.devices
+	timer.start()
 
     def _initialize_new_deivce(self, device_item_id, device_ip):
         self.bacnet_adapter.who_is(None, None, Address(device_ip))

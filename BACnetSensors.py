@@ -64,7 +64,7 @@ class BACnetSensors:
 		destination=Address(new_sensor[0])
 	    )
 	    iocb = IOCB(request)
-	    iocb.add_callback(self._got_props_for_new_object, sensor)
+	    iocb.add_callback(self._got_props_for_new_object, new_sensor[1])
 	    self.bacnet_adapter.request_io(iocb)
 	    count += 1	    
 	timer.start()
