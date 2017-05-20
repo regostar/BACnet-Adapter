@@ -48,7 +48,13 @@ class BACnetAdapter(BIPSimpleApplication):
 
     def do_UnconfirmedCOVNotificationRequest(self, apdu):
 	now = datetime.datetime.utcnow().isoformat()
-	sensor_name = self.bacnet_sensors.sensors[(str(apdu.pduSource), apdu.monitoredObjectIdentifier[1])]["name"]
+	#there is a chance the sensor hasn't been registered yet at a device, and the sensor list being updated, which means this key won't exist. if this happens just throw away the value, it should get picked up on the next pass
+	try:
+	    sensor_name = self.bacnet_sensors.sensors[(str(apdu.pduSource), apdu.monitoredObjectIdentifier[1])]["name"]
+	except KeyError:
+	    print "cov for an unregistered device, just throwing away for now"
+	    return
+
 	print sensor_name
 	msg_to_send = {
 	    "time_stamp": now,

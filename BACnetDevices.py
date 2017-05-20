@@ -18,7 +18,9 @@ class BACnetDevices():
         self.bacnet_adapter = bacnet_adapter
         self.cb_collection = core.Collection(self.cb_client, self.BACNET_DEVICES_COLLECTION_ID)
 	self.devices = {}
+	self.first_run = True
 	self._get_devices_from_cb_collection()
+	self._check_for_unregistered_sensors()
 
     def _get_devices_from_cb_collection(self):
 	print "checking for new bacnet controllers"
@@ -69,7 +71,8 @@ class BACnetDevices():
 	    }
 	    changes = {
 		"device_name": device_name,
-		"bacnet_device_identifier":  device_id[1],	    
+		"bacnet_device_identifier":  device_id[1],
+		"all_sensors_registered": False
 	    }
 	    results = self.cb_collection.update(changes, query)   
 	    if results["count".encode('utf-8')] != 1:
@@ -95,7 +98,42 @@ class BACnetDevices():
 	    print("error (%s) when attempting to get objectList of device (%s)" % (str(iocb.ioError), iocb.pduSource))
 	else:
 	    apdu = iocb.ioResponse
-	    new_sensors = apdu.propertyValue.cast_out(ArrayOf(ObjectIdentifier))
+	    all_sensors = apdu.propertyValue.cast_out(ArrayOf(ObjectIdentifier))
+	    #now check that these sensors aren't already registered as a cb device
+	    new_sensors = []
+	    for sensor in all_sensors:
+		key = (str(apdu.pduSource), sensor[1])
+	    	if not key in self.bacnet_adapter.bacnet_sensors.sensors and sensor[0] != "trendLog" and sensor[0] != "device" and sensor[0] != "program":
+		    new_sensors.append(sensor)
+	    print "device {} has {}/{} sensors not registered, now trying to register them".format(self.devices[str(apdu.pduSource)]["device_name"], len(new_sensors), len(all_sensors))
+	    if len(new_sensors) == 0:
+	        #update the controller in the db to say all sensors are registered finally
+		query = {"FILTERS":[[{"EQ":[{"ip_address": str(apdu.pduSource)}]}]]}
+		changes = {
+		    "all_sensors_registered": True
+		}
+		results = self.cb_collection.update(changes, query)
+		if results["count".encode("utf-8")] != 1:
+		    print "failed to update the collection"
+		else:
+		    return
 	    self.bacnet_adapter.bacnet_sensors.add_new_sensors_from_device(new_sensors, self.devices[str(apdu.pduSource)])
-	    #self.bacnet_adapter.bacnet_sensors.add_new_sensors_from_device([('analogInput', 3000126), ('analogInput', 3000145), ('analogValue', 3001213), ('analogValue', 3001215), ('analogValue', 3001195), ('analogValue', 3001203), ('analogValue', 3001204)], self.devices[str(apdu.pduSource)])
 
+    def _check_for_unregistered_sensors(self):
+	#when we are just starting give some time for devices to be initialized
+	timer = threading.Timer(600, self._check_for_unregistered_sensors)
+        timer.daemon = True
+	if self.first_run:
+	    self.first_run = False
+	    first_run_timer = threading.Timer(60, self._check_for_unregistered_sensors)
+	    first_run_timer.daemon = True
+	    first_run_timer.start()
+	    return
+	collection = self.cb_collection.fetch()
+        devices = collection['DATA']
+        for device in devices:
+            if device["device_name"] != None and device["device_name"] != "".encode("utf-8") and not device["all_sensors_registered"]:
+                print "bacnet controller {} does not have all devices registered yet".format(device["device_name"])
+                #self._initialize_new_deivce(device["item_id"], device["ip_address"].encode("utf-8"))
+		self._get_new_sensors_for_new_device(Address(device["ip_address"].encode("utf-8")), ('device', device["bacnet_device_identifier"]))
+	timer.start()
