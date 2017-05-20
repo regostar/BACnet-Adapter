@@ -11,7 +11,7 @@ from bacpypes.primitivedata import ObjectIdentifier
 
 class BACnetDevices():
 
-    BACNET_DEVICES_COLLECTION_ID = "9697cf910bec9e86d8d4af9cc19f01"
+    BACNET_DEVICES_COLLECTION_ID = "e6bcf9910b84b7aad4d7fee7d8c201"
 
     def __init__(self, cb_client, bacnet_adapter):
         self.cb_client = cb_client

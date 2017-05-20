@@ -26,10 +26,11 @@ class BACnetSensors:
 
     def add_new_sensors_from_device(self, sensors, device_info):
 	# first filter out any trendLogs, since we don't need them
-	print "found some new sensors to add"
-	new_sensors = {}
+	print "found {} new sensors to add".format(len(sensors))
+	count = 0
 	for sensor in sensors:
 	    if sensor[0] != 'trendLog' and sensor[0] != 'device':
+		count += 1
 		key = (device_info["ip_address"], sensor[1])
 		self.sensors[key] = {
 		    "bacnet_object_identifier": sensor,
@@ -37,15 +38,16 @@ class BACnetSensors:
 		    "update_method": None
 		}
 		self.pending_new_sensors.append((device_info["ip_address"].encode("utf-8"), sensor))
+	print "actually adding {} of those sensors".format(count)
 
     def _process_new_sensors(self):
 	timer = threading.Timer(15, self._process_new_sensors)
 	timer.daemon = True
 	num_to_process = len(self.pending_new_sensors)
-	if num_to_process > 100:
-	     num_to_process = 100
+	if num_to_process > 50:
+	     num_to_process = 50
 	count = 0
-	print("processing {} new sensors".format(num_to_process))
+	print("processing {}/{} new sensors".format(num_to_process, len(self.pending_new_sensors)))
 	while count < num_to_process:
 	    new_sensor = self.pending_new_sensors.pop(0)
 	    props_to_get = ['objectName', 'description', 'presentValue', 'units']
@@ -72,7 +74,7 @@ class BACnetSensors:
     def _got_props_for_new_object(self, iocb, obj_id):
 	timestamp = datetime.datetime.utcnow().isoformat()
 	if iocb.ioError:
-	    print("error getting property list: {0}".format(str(iocb.ioError)))
+	    print("error getting object ({0}) details: {1}".format(obj_id, str(iocb.ioError)))
 	    return
 	else:
 	    apdu = iocb.ioResponse
@@ -106,7 +108,7 @@ class BACnetSensors:
 
     def _update_cb_devices(self):
 	print "updating cb devices"
-	timer = threading.Timer(60, self._update_cb_devices)
+	timer = threading.Timer(120, self._update_cb_devices)
 	timer.daemon = True
 	cb_devices = self.cb_devices.getAllDevices()
 	updated_sensors = {}
@@ -119,6 +121,7 @@ class BACnetSensors:
 	timer.start()
 
     def _start_polling(self):
+	print "adding more poll requests to queue"
 	timer = threading.Timer(120, self._start_polling)
 	timer.daemon = True
 	for key in self.sensors:
@@ -132,9 +135,10 @@ class BACnetSensors:
 	timer = threading.Timer(15, self._process_poll_requests)
 	time.daemon = True
 	num_to_process = len(self.pending_poll_requests)
-	if num_to_process < 100:
+	if num_to_process > 100:
 	    num_to_process = 100
 	count = 0
+	print "processing {}/{} polling requests".format(num_to_process, len(self.pending_poll_requests))
 	while count < num_to_process:
 	    if len(self.pending_poll_requests) > 0:
 		poll_request = self.pending_poll_requests.pop(0)
@@ -171,10 +175,13 @@ class BACnetSensors:
 	print "resubing covs"
 	timer = threading.Timer(180, self._resub_existing_covs)
 	timer.daemon = True
+	count = 0
 	for key in self.sensors:
 	    update_method = self.sensors[key]["update_method"]
 	    if update_method is not None and update_method == "cov":
 		self._cov_subscribe(key[0].encode("utf-8"), (self.sensors[key]["bacnet_object_type"].encode("utf-8"), self.sensors[key]["bacnet_identifier"]))
+		count += 1
+	print "resubed {} cov subscriptions".format(count)
 	timer.start()
 
     def _cov_subscribe(self, parent_device_ip, sensor_obj_id):
