@@ -18,6 +18,7 @@ class BACnetDevices():
         self.bacnet_adapter = bacnet_adapter
         self.cb_collection = core.Collection(self.cb_client, self.BACNET_DEVICES_COLLECTION_ID)
 	self.devices = {}
+	self.devices_lock = threading.Lock()
 	self.first_run = True
 	self._get_devices_from_cb_collection()
 	self._check_for_unregistered_sensors()
@@ -28,11 +29,13 @@ class BACnetDevices():
 	timer.daemon = True
 	collection = self.cb_collection.fetch()
 	devices = collection['DATA']
+	self.devices_lock.acquire()
 	for device in devices:
 	    if device["device_name"] == None or device["device_name"] == "".encode("utf-8"):
 		print "found new device {}".format(device["item_id"])
 		self._initialize_new_deivce(device["item_id"], device["ip_address"].encode("utf-8"))
 	    self.devices[device["ip_address"]] = device
+	self.devices_lock.release()
 	timer.start()
 
     def _initialize_new_deivce(self, device_item_id, device_ip):
@@ -40,9 +43,12 @@ class BACnetDevices():
 
     def got_new_device_who_is_response(self, apdu):
         # first check that this new device is one we actually care about (some times we get whois responses from other devices, even though the request was targeted to a specific ip rather than a global address)
+	self.devices_lock.acquire()
 	if not str(apdu.pduSource) in self.devices:
 	    print "got who is response from a device we don't care about"
+	    self.devices_lock.release()
 	    return
+	self.devices_lock.release()
 	# now we need to get the device name using the identifier we just got
         request = ReadPropertyRequest(
             destination=apdu.pduSource,
@@ -79,8 +85,10 @@ class BACnetDevices():
 		print "failed to update the deivce"
 	    else:
 		#rather then fetch from the server again, just update these here
+		self.devices_lock.acquire()
 		self.devices[str(apdu.pduSource)]["device_name"] = device_name.decode("utf-8")
 		self.devices[str(apdu.pduSource)]["bacnet_device_identifier"] = device_id[1]
+		self.devices_lock.release()
 		self._get_new_sensors_for_new_device(apdu.pduSource, device_id)
 
     def _get_new_sensors_for_new_device(self, source, device_id):
@@ -105,6 +113,7 @@ class BACnetDevices():
 		key = (str(apdu.pduSource), sensor[1])
 	    	if not key in self.bacnet_adapter.bacnet_sensors.sensors and sensor[0] != "trendLog" and sensor[0] != "device" and sensor[0] != "program":
 		    new_sensors.append(sensor)
+	    self.devices_lock.acquire()
 	    print "device {} has {}/{} sensors not registered, now trying to register them".format(self.devices[str(apdu.pduSource)]["device_name"], len(new_sensors), len(all_sensors))
 	    if len(new_sensors) == 0:
 	        #update the controller in the db to say all sensors are registered finally
@@ -116,8 +125,10 @@ class BACnetDevices():
 		if results["count".encode("utf-8")] != 1:
 		    print "failed to update the collection"
 		else:
+		    self.devices_lock.release()
 		    return
 	    self.bacnet_adapter.bacnet_sensors.add_new_sensors_from_device(new_sensors, self.devices[str(apdu.pduSource)])
+	    self.devices_lock.release()
 
     def _check_for_unregistered_sensors(self):
 	#when we are just starting give some time for devices to be initialized

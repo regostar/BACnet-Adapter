@@ -13,6 +13,7 @@ from utils import decode_multiple_properties
 class BACnetSensors:
     def __init__(self, cb_device_client, bacnet_adapter):
 	self.sensors = {}
+	self.sensor_lock = threading.Lock()
 	self.cb_device_client = cb_device_client
 	self.bacnet_adapter = bacnet_adapter
 	self.cb_devices = Devices.Devices(self.cb_device_client)
@@ -28,6 +29,7 @@ class BACnetSensors:
 	# first filter out any trendLogs, since we don't need them
 	print "found {} new sensors to add".format(len(sensors))
 	count = 0
+	self.sensor_lock.acquire()
 	for sensor in sensors:
 	    if sensor[0] != "trendLog" and sensor[0] != "device" and sensor[0] != "program":
 		count += 1
@@ -39,6 +41,7 @@ class BACnetSensors:
 		    "update_method": None
 		}
 		self.pending_new_sensors.append((device_info["ip_address"].encode("utf-8"), sensor))
+	self.sensor_lock.release()
 	print "actually adding {} of those sensors".format(count)
 
     def _process_new_sensors(self):
@@ -105,7 +108,9 @@ class BACnetSensors:
 	    if "units" in props_obj:
 		sensor_obj["units"] = props_obj["units"]
 	    print "about to set sensor obj for {} {}".format(sensor_obj["name"], str(apdu.pduSource))
+	    self.sensor_lock.acquire()
 	    self.sensors[(str(apdu.pduSource), obj_id[1])] = sensor_obj
+	    self.sensor_lock.release()
 	    print "sending sensor obj to platfor for {}".format(sensor_obj["name"])
 	    self.bacnet_adapter.send_value_to_platform(sensor_obj)
 	    print "just sent new sensor obj to platform for sensor {}".format(sensor_obj["name"])
@@ -127,27 +132,35 @@ class BACnetSensors:
 	    if device["type"] != "adapter" and device["enabled"] == True:
 	    	key = (device["parent_device_ip"], device["bacnet_identifier"])
 	    	updated_sensors[key] = device
+	self.sensor_lock.acquire()
 	self.sensors = updated_sensors
+	self.sensor_lock.release()
 	print("{} devices pulled from cb".format(len(self.sensors)))
 	timer.start()
 
     def _start_polling(self):
 	print "adding more poll requests to queue"
-	timer = threading.Timer(180, self._start_polling)
+	timer = threading.Timer(300, self._start_polling)
 	timer.daemon = True
+	self.sensor_lock.acquire()
 	for key in self.sensors:
 	    update_method = self.sensors[key]["update_method"]
 	    if update_method is not None and update_method == "polling":
 		self.pending_poll_requests.append((key[0].encode("utf-8"), (self.sensors[key]["bacnet_object_type"].encode("utf-8"), self.sensors[key]["bacnet_identifier"])))
 		#self._get_present_value_prop(key[0].encode("utf-8"), (self.sensors[key]["bacnet_object_type"].encode("utf-8"), self.sensors[key]["bacnet_identifier"]))
+	self.sensor_lock.release()
 	timer.start()
 
     def _process_poll_requests(self):
-	timer = threading.Timer(15, self._process_poll_requests)
-	time.daemon = True
+	timer_length = 0.1
+	#if there are no more polling requests, let's dial back this timer to 10 seconds
 	num_to_process = len(self.pending_poll_requests)
-	if num_to_process > 200:
-	    num_to_process = 200
+	if num_to_process == 0:
+	    timer_length = 10
+	timer = threading.Timer(timer_length, self._process_poll_requests)
+	time.daemon = True
+	if num_to_process > 1:
+	    num_to_process = 1
 	count = 0
 	print "processing {}/{} polling requests".format(num_to_process, len(self.pending_poll_requests))
 	while count < num_to_process:
@@ -158,6 +171,7 @@ class BACnetSensors:
 	timer.start()
 
     def _get_present_value_prop(self, parent_device_ip, sensor_obj_id):
+	print "getting present value for obj {}".format(sensor_obj_id)
 	request = ReadPropertyRequest(
 	    destination=Address(parent_device_ip),
 	    objectIdentifier=sensor_obj_id,
@@ -166,6 +180,7 @@ class BACnetSensors:
 	iocb = IOCB(request)
 	iocb.add_callback(self._got_present_value_for_existing_sensor, sensor_obj_id)
 	self.bacnet_adapter.request_io(iocb)
+	print "sent request for present value for obj {}".format(sensor_obj_id)
 
     def _got_present_value_for_existing_sensor(self, iocb, obj_id):
 	print "got present vale for sensor {}".format(obj_id[1])
@@ -176,15 +191,15 @@ class BACnetSensors:
 	    apdu = iocb.ioResponse
 	    print "getting datatype for presentValue for {}".format(obj_id[1])
 	    datatype = get_datatype(obj_id[0], "presentValue")
-	    print "getting value for presentValue for {}".format(obj_id[1])
 	    value = apdu.propertyValue.cast_out(datatype)
 	    print "creating msg to send to platform for {}".format(obj_id[1])
+	    self.sensor_lock.acquire()
 	    msg_to_send = {
 		"time_stamp": now,
 		"name": self.sensors[(str(apdu.pduSource), obj_id[1])]["name"],
 		"present_value": value
 	    }
-	    print "sending msg for {}".format(obj_id[1])
+	    self.sensor_lock.release()
 	    self.bacnet_adapter.send_value_to_platform(msg_to_send)
 	    print "msg sent to platform for {}".format(obj_id[1])
 	
@@ -193,11 +208,13 @@ class BACnetSensors:
 	timer = threading.Timer(600, self._resub_existing_covs)
 	timer.daemon = True
 	count = 0
+	self.sensor_lock.acquire()
 	for key in self.sensors:
 	    update_method = self.sensors[key]["update_method"]
 	    if update_method is not None and update_method == "cov":
 		self._cov_subscribe(key[0].encode("utf-8"), (self.sensors[key]["bacnet_object_type"].encode("utf-8"), self.sensors[key]["bacnet_identifier"]))
 		count += 1
+	self.sensor_lock.release()
 	print "resubed {} cov subscriptions".format(count)
 	timer.start()
 
