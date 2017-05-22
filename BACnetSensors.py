@@ -45,11 +45,15 @@ class BACnetSensors:
 	print "actually adding {} of those sensors".format(count)
 
     def _process_new_sensors(self):
-	timer = threading.Timer(15, self._process_new_sensors)
+	timer_length = 0.4
+	num_to_process = len(self.pending_new_sensors)
+	if num_to_process == 0:
+	    timer_length = 10
+	timer = threading.Timer(timer_length, self._process_new_sensors)
 	timer.daemon = True
 	num_to_process = len(self.pending_new_sensors)
-	if num_to_process > 100:
-	     num_to_process = 100
+	if num_to_process > 1:
+	     num_to_process = 1
 	count = 0
 	print("processing {}/{} new sensors".format(num_to_process, len(self.pending_new_sensors)))
 	while count < num_to_process:
@@ -76,7 +80,7 @@ class BACnetSensors:
 	timer.start()
 
     def _got_props_for_new_object(self, iocb, obj_id):
-	print "got props for a new sensor"
+	print "got props for a new sensor {}".format(obj_id)
 	timestamp = datetime.datetime.utcnow().isoformat()
 	if iocb.ioError:
 	    print("error getting object ({0}) details: {1}".format(obj_id, str(iocb.ioError)))
@@ -130,8 +134,13 @@ class BACnetSensors:
 	updated_sensors = {}
 	for device in cb_devices:
 	    if device["type"] != "adapter" and device["enabled"] == True:
-	    	key = (device["parent_device_ip"], device["bacnet_identifier"])
-	    	updated_sensors[key] = device
+		try:
+	    	    key = (device["parent_device_ip"], device["bacnet_identifier"])
+		except KeyError, e:
+		    print "device is missing parent_device_ip or bacnet_identifier {}".format(device)	    	
+		    time.sleep(5)
+		    continue
+		updated_sensors[key] = device
 	self.sensor_lock.acquire()
 	self.sensors = updated_sensors
 	self.sensor_lock.release()

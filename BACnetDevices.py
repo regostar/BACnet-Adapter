@@ -25,7 +25,7 @@ class BACnetDevices():
 
     def _get_devices_from_cb_collection(self):
 	print "checking for new bacnet controllers"
-	timer = threading.Timer(120, self._get_devices_from_cb_collection)
+	timer = threading.Timer(600, self._get_devices_from_cb_collection)
 	timer.daemon = True
 	collection = self.cb_collection.fetch()
 	devices = collection['DATA']
@@ -92,6 +92,7 @@ class BACnetDevices():
 		self._get_new_sensors_for_new_device(apdu.pduSource, device_id)
 
     def _get_new_sensors_for_new_device(self, source, device_id):
+	print "getting object list for deivce {}".format(device_id)
 	request = ReadPropertyRequest(
 	    destination=source,
 	    objectIdentifier=device_id,
@@ -102,11 +103,15 @@ class BACnetDevices():
 	self.bacnet_adapter.request_io(iocb)
 	    
     def _got_sensors_for_device(self, iocb):
+	print "got list of sensors for device"
 	if iocb.ioError:
 	    print("error (%s) when attempting to get objectList of device (%s)" % (str(iocb.ioError), iocb.pduSource))
 	else:
+	    print "no error for getting list of sensors"
 	    apdu = iocb.ioResponse
+	    print "there was an ioResponse"
 	    all_sensors = apdu.propertyValue.cast_out(ArrayOf(ObjectIdentifier))
+	    print "device {} has {} sensors total".format(self.devices[str(apdu.pduSource)]["device_name"], len(all_sensors))
 	    #now check that these sensors aren't already registered as a cb device
 	    new_sensors = []
 	    for sensor in all_sensors:
@@ -116,6 +121,7 @@ class BACnetDevices():
 	    self.devices_lock.acquire()
 	    print "device {} has {}/{} sensors not registered, now trying to register them".format(self.devices[str(apdu.pduSource)]["device_name"], len(new_sensors), len(all_sensors))
 	    if len(new_sensors) == 0:
+		print "updating device that all sensors are now registered"
 	        #update the controller in the db to say all sensors are registered finally
 		query = {"FILTERS":[[{"EQ":[{"ip_address": str(apdu.pduSource)}]}]]}
 		changes = {
@@ -126,6 +132,7 @@ class BACnetDevices():
 		    print "failed to update the collection"
 		else:
 		    self.devices_lock.release()
+		    print "device udpated"
 		    return
 	    self.bacnet_adapter.bacnet_sensors.add_new_sensors_from_device(new_sensors, self.devices[str(apdu.pduSource)])
 	    self.devices_lock.release()
